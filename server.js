@@ -1,25 +1,30 @@
-import express from 'express';
 import dotenv from 'dotenv';
+import express from 'express';
 import {dirname, join} from 'path';
 import { MONGODB_URI, PORT } from "./config.js";
 import { fileURLToPath } from 'url';
 import router from './routes/routes.js';
-import {logger} from './middleware/logger.js';
+import users from './routes/userRoutes.js';
+import {logger, logEvents} from './middleware/logger.js';
 import errorHandler from './middleware/errorHandler.js';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import corsOptions from './config/corsOptions.js';
+import connectDB from './config/database.js';
+import mongoose from 'mongoose';
 
-const app = express();
 
 //Initializations
 dotenv.config();
+const app = express();
+connectDB();
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 //Global variables
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 //Routes
 app.use('/', router);
+app.use('/users', users);
 
 //Middleware
 app.use(express.json());
@@ -44,6 +49,12 @@ app.all('*', (req, res) => {
 });
 
 app.use(errorHandler);
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
-export default app;
+mongoose.connection.once('open', () => {
+    console.log('Connected to Mongo DB.');
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+}).on('error', (err) => {
+    console.log(err);
+    logEvents(`${err.name}: ${err.message}\t${req.method}\t${req.url}
+    \t${req.headers.origin}`, 'errLogs.log');
+})
