@@ -1,17 +1,15 @@
-import dotenv from 'dotenv';
-import express from 'express';
-import {dirname, join} from 'path';
-import { MONGODB_URI, PORT } from "./config.js";
-import { fileURLToPath } from 'url';
-import router from './routes/routes.js';
-import users from './routes/userRoutes.js';
-import {logger, logEvents} from './middleware/logger.js';
-import errorHandler from './middleware/errorHandler.js';
-import cookieParser from 'cookie-parser';
-import cors from 'cors';
-import corsOptions from './config/corsOptions.js';
-import connectDB from './config/database.js';
-import mongoose from 'mongoose';
+import dotenv from 'dotenv'
+import express from 'express'
+import {dirname, join} from 'path'
+import { PORT } from "./config.js"
+import { fileURLToPath } from 'url'
+import {logger, logEvents} from './middleware/logger.js'
+import errorHandler from './middleware/errorHandler.js'
+import cookieParser from 'cookie-parser'
+import cors from 'cors'
+import corsOptions from './config/corsOptions.js'
+import connectDB from './config/database.js'
+import mongoose from 'mongoose'
 
 
 //Initializations
