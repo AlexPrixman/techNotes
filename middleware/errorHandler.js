@@ -1,17 +1,19 @@
-import { logEvents } from "./logger.js";
-
-const errorHandler = (err, req, res, next) =>{
-    logEvents(`${err.name}: ${err.message}\t${req.method}\t${req.url}
-    \t${req.headers.origin}`, 'errLogs.log')
-
-    console.log(err.stack);
-
-    //Sending server error if exists
-    const status = res.statusCode ? res.statusCode : 500; 
-
-    res.status(status)
-
-    res.json({message: err.message})
+export default function errorHandler(err, req, res, next) {
+  if (res.headersSent) return next(err);
+  let status = err.status || 500;
+  let message = err.message;
+  if (err.code === 11000) {
+    status = 409;
+    message = "That username or note title already exists.";
+  }
+  if (err.name === "ValidationError" || err.name === "CastError") status = 400;
+  if (err.name === "VersionError") {
+    status = 409;
+    message = "This note changed. Reload it before saving again.";
+  }
+  if (status >= 500) {
+    console.error(err);
+    message = "An unexpected server error occurred.";
+  }
+  res.status(status).json({ message });
 }
-
-export default errorHandler

@@ -1,37 +1,30 @@
-import mongoose from 'mongoose';
-import Inc from 'mongoose-sequence';
-
-const AutoIncrement = Inc(mongoose);
-
-const noteSchema = new mongoose.Schema(
-    {
-        user: {
-            type: mongoose.Schema.Types.ObjectId,
-            required: true,
-            ref: 'User'
-        },
-        title: {
-            type: String,
-            required: true
-        },
-        text: {
-            type: String,
-            required: true
-        },
-        completed: {
-            type: Boolean,
-            default: false
-        }
+import mongoose from "mongoose";
+import Counter from "./Counter.js";
+const schema = new mongoose.Schema(
+  {
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+      ref: "User",
+      index: true,
     },
-    {
-        timestamps: true
-    }
-)
-
-noteSchema.plugin(AutoIncrement, {
-    inc_field: 'ticket',
-    id: 'ticketNumber',
-    start_seq: 1000
-})
-
-export default mongoose.model('Note', noteSchema)
+    title: { type: String, required: true, trim: true, maxlength: 200 },
+    titleKey: { type: String, required: true, unique: true },
+    text: { type: String, required: true, trim: true, maxlength: 10000 },
+    completed: { type: Boolean, default: false },
+    ticket: { type: Number, unique: true, required: true },
+  },
+  { timestamps: true, optimisticConcurrency: true },
+);
+schema.pre("validate", async function () {
+  this.titleKey = this.title?.trim().toLowerCase();
+  if (this.isNew && !this.ticket) {
+    const counter = await Counter.findOneAndUpdate(
+      { _id: "ticketNumber" },
+      [{ $set: { seq: { $add: [{ $ifNull: ["$seq", 999] }, 1] } } }],
+      { upsert: true, returnDocument: "after", updatePipeline: true },
+    );
+    this.ticket = counter.seq;
+  }
+});
+export default mongoose.model("Note", schema);

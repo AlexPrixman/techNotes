@@ -1,58 +1,34 @@
-import dotenv from 'dotenv'
-import express from 'express'
-import {dirname, join} from 'path'
-import { PORT } from "./config.js"
-import { fileURLToPath } from 'url'
-import {logger, logEvents} from './middleware/logger.js'
-import errorHandler from './middleware/errorHandler.js'
-import cookieParser from 'cookie-parser'
-import cors from 'cors'
-import corsOptions from './config/corsOptions.js'
-import connectDB from './config/database.js'
-import mongoose from 'mongoose'
-
-
-//Initializations
-dotenv.config();
-const app = express();
-connectDB();
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-//Global variables
-
-//Routes
-app.use('/', router);
-app.use('/users', users);
-
-//Middleware
-app.use(express.json());
-app.use(logger);
-app.use(cookieParser());
-app.use(cors(corsOptions));
-
-//Static files
-app.use('/', express.static(join(__dirname, 'public')));
-
-
-//Error status codes
-app.all('*', (req, res) => {
-    res.status(404)
-    if(req.accepts('html')){
-        res.sendFile(join(__dirname, 'views', '404.html'))
-    } else if (req.accepts('json')){
-        res.json({message: "404 Not Found"})
-    } else {
-        res.type('txt').send({message: "404 Not Found"});
-    }
-});
-
-app.use(errorHandler);
-
-mongoose.connection.once('open', () => {
-    console.log('Connected to Mongo DB.');
-    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-}).on('error', (err) => {
-    console.log(err);
-    logEvents(`${err.name}: ${err.message}\t${req.method}\t${req.url}
-    \t${req.headers.origin}`, 'errLogs.log');
-})
+import mongoose from "mongoose";
+import MongoStore from "connect-mongo";
+import { loadConfig } from "./config.js";
+import connectDB from "./config/database.js";
+import { createApp } from "./app.js";
+const config = loadConfig();
+try {
+  await connectDB(config.mongoUri);
+  const store = MongoStore.create({
+    client: mongoose.connection.getClient(),
+    autoRemove: "native",
+  });
+  const app = createApp({ config, sessionStore: store });
+  const server = app.listen(config.port, () =>
+    console.log(`techNotes API listening on ${config.port}`),
+  );
+  let stopping = false;
+  const stop = () => {
+    if (stopping) return;
+    stopping = true;
+    server.close(async () => {
+      await store.close();
+      await mongoose.disconnect();
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 10000).unref();
+  };
+  process.on("SIGTERM", stop);
+  process.on("SIGINT", stop);
+} catch (error) {
+  console.error(`Startup failed: ${error.message}`);
+  await mongoose.disconnect();
+  process.exitCode = 1;
+}

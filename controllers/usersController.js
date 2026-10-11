@@ -1,122 +1,99 @@
-import User from '../models/User.js';
-import Note from '../models/Note.js';
-import asyncHandler from 'express-async-handler';
-import bcrypt from 'bcrypt';
-
-//@desc Get all users
-//@route GET /users
-//@access Private
-const getAllUsers = asyncHandler(async (req, res) => {
-    const users = await User.find().select('-password').lean()
-    if(!users?.length){
-        return res.status(400).json({message:'No user was found'})
-    }
-    res.json(users)
-})
-
-//@desc Create a new user
-//@route POST /users
-//@access Private
-const createNewUser = asyncHandler(async (req, res) => {
-    const {username, password, roles} = req.body
-
-    //Confirm the data
-    if(!username || !password || !Array.isArray(roles) || !roles.length){
-        return res.status(400).json({message:'All fields are required.'})
-    }
-
-    //Verifying duplicates
-    const duplicate = await User.findOne({username}).lean().exec()
-    
-    if(duplicate){
-        return res.status(409).json({message: 'User already exists.'})
-    }
-    
-    //Hash the password
-    const hashPassword = await bcrypt.hash(password, 10) //10 Salt rounds
-
-    //Assign values to each field of the new user
-    const userObject = {username, "password": hashPassword, roles}
-
-    //Create new user
-    const user = await User.create(userObject)
-
-    //Validate request for user creation
-    if(user){
-        res.status(201).json({message:`The user ${username} has been created`})    
-    } else {
-        res.status(400).json({message:'There was an error, contact the system admin'})
-    }
-})
-
-//@desc Update a current user
-//@route PATCH /users
-//@access Private
-const updateUser = asyncHandler(async (req, res) => {
-    const {id, username, roles, active, password} = req.body
-    
-    //Confirm the date
-    if(!id || !username || !Array.isArray(roles) || !roles.length || typeof active !== 'boolean'){
-        return res.status(400).json({message: 'All fields are required'})
-    }
-
-    const user = await User.findById(id).exec()
-
-    if(!user){
-        return res.status(400).json({message: 'This user could not be found.'})
-    }
-
-    //Check for duplicates
-    const duplicates = await User.findOne({username}).lean().exec()
-
-    //Allow updates to the original user
-    if(duplicates && duplicates?._id.toString() !== id){
-        return res.status(409).json({message:'Duplicate username.'})
-    }
-
-    //Pointing to the model props
-    user.username = username
-    user.roles = roles
-    user.active = active
-
-    if(password){
-        //Hashing password
-        user.password = await bcrypt.hashSync(password, 10)
-    }
-
-    const updatedUser = await user.save()
-
-    res.json({message: `${updatedUser.username} has been updated.`})
-})
-
-//@desc Delete a current user
-//@route DELETE /users
-//@access Private
-const deleteUser = asyncHandler(async (req, res) => {
-    const {id} = req.body
-
-    if(!id){
-        return res.status(400).json({message: 'User ID required'})
-    }
-
-    //Prevent deletion if user has pending notes
-    const note = await Note.findOne({user: id}).lean().exec()
-
-    if(note){
-        return res.status(404).json({message:'User has pending notes to finish.'})
-    }
-
-    const user = await User.findById(id).exec()
-
-    if(!user){
-        return res.status(400).json({message: 'User could not be found.'})
-    }
-
-    const deletedUser = await user.deleteOne()
-
-    const reply = `User ${deletedUser.username} with ID ${deletedUser._id} deleted.`
-
-    res.json(reply)
-})
-
-export {getAllUsers, createNewUser, updateUser, deleteUser}
+import bcrypt from "bcryptjs";
+import User from "../models/User.js";
+import Note from "../models/Note.js";
+import {
+  HttpError,
+  objectId,
+  username,
+  password,
+  roles,
+  boolean,
+  publicUser,
+} from "../lib/validation.js";
+export async function getAllUsers(req, res) {
+  res.json((await User.find().sort({ usernameKey: 1 })).map(publicUser));
+}
+export async function createNewUser(req, res) {
+  const body = req.body || {};
+  const name = username(body.username);
+  const userRoles = roles(body.roles ?? ["Employee"]);
+  if (!req.user.roles.includes("Admin") && userRoles.includes("Admin"))
+    throw new HttpError(403, "Only an Admin may grant Admin access.");
+  const user = await User.create({
+    username: name,
+    password: await bcrypt.hash(password(body.password), 12),
+    roles: userRoles,
+  });
+  res.status(201).json(publicUser(user));
+}
+export async function updateUser(req, res) {
+  const body = req.body || {};
+  const user = await User.findById(objectId(req.params.id || body.id)).select(
+    "+password",
+  );
+  if (!user) throw new HttpError(404, "User not found.");
+  const name = username(body.username);
+  const userRoles = roles(body.roles);
+  const active = boolean(body.active, "Active");
+  if (
+    !req.user.roles.includes("Admin") &&
+    (user.roles.includes("Admin") || userRoles.includes("Admin"))
+  )
+    throw new HttpError(403, "Only an Admin may change an Admin account.");
+  if (
+    String(user._id) === String(req.user._id) &&
+    (!active ||
+      (!userRoles.includes("Admin") && req.user.roles.includes("Admin")))
+  )
+    throw new HttpError(
+      409,
+      "You cannot deactivate or remove your own Admin access.",
+    );
+  if (
+    user.active &&
+    user.roles.includes("Admin") &&
+    (!active || !userRoles.includes("Admin")) &&
+    (await User.countDocuments({ active: true, roles: "Admin" })) <= 1
+  )
+    throw new HttpError(409, "Keep at least one active Admin.");
+  if (user.active !== active)
+    user.sessionVersion = (user.sessionVersion ?? 0) + 1;
+  user.username = name;
+  user.roles = userRoles;
+  user.active = active;
+  if (body.password !== undefined && body.password !== "") {
+    user.password = await bcrypt.hash(password(body.password), 12);
+    user.sessionVersion = (user.sessionVersion ?? 0) + 1;
+  }
+  await user.save();
+  res.json(publicUser(user));
+}
+export async function deleteUser(req, res) {
+  const id = objectId(req.params.id || req.body?.id);
+  const user = await User.findById(id);
+  if (!user) throw new HttpError(404, "User not found.");
+  if (String(req.user._id) === id)
+    throw new HttpError(409, "You cannot delete your own account.");
+  if (user.roles.includes("Admin") && !req.user.roles.includes("Admin"))
+    throw new HttpError(403, "Only an Admin may delete an Admin.");
+  if (
+    user.active &&
+    user.roles.includes("Admin") &&
+    (await User.countDocuments({ active: true, roles: "Admin" })) <= 1
+  )
+    throw new HttpError(409, "Keep at least one active Admin.");
+  if (await Note.exists({ user: id }))
+    throw new HttpError(
+      409,
+      "Reassign or delete this user’s notes before deleting the account.",
+    );
+  await user.deleteOne();
+  res.sendStatus(204);
+}
+export async function getAssignees(req, res) {
+  res.json(
+    (await User.find({ active: true }).sort({ usernameKey: 1 })).map(
+      publicUser,
+    ),
+  );
+}
